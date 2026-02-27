@@ -41,35 +41,46 @@ Clean, pruned code with:
 ### Step 1: Parse Constraints
 Identify which variables have known values from the user's description.
 
-### Step 2: Systematic Code Analysis
+### Step 2: Load Code File
+**CRITICAL: Read the entire file at once.** Do NOT read line-by-line or in chunks.
+- Use `read` without offset/limit to load complete file into context
+- This enables global analysis and avoids repeated context rebuilding
+- If file exceeds context window, use `exec` with `cat` or `head/tail` to extract relevant sections
 
-**2.1 Locate all conditional expressions containing target variables**
-- Search for: `if (variable)`, `if (variable == ...)`, `if (!variable)`, `when (variable)`, etc.
-- Include: method calls using the variable as parameter
+### Step 3: Systematic Code Analysis
+With the complete file in context:
 
-**2.2 Evaluate each condition with known values**
-- For `if (enableJsonResponse)` where value is `true`: false branch is unreachable
-- For `if (!enableJsonResponse)` where value is `true`: entire block is unreachable
-- For `when` / `switch`: keep only matching case, remove others
+**3.1 Locate all conditional expressions containing target variables**
+- Scan for: `if (variable)`, `if (variable == ...)`, `if (!variable)`, `when (variable)`, `switch (variable)`, etc.
+- Identify method signatures using the variable as parameter
+- Note constructor parameters and field declarations
 
-**2.3 Identify cascade deletions**
-- If a method becomes unreachable (only called from deleted branches), mark for removal
-- If a field becomes unused, mark for removal
-- Track dependencies: deleted code → callers → fields/methods only they used
+**3.2 Evaluate each condition with known values**
+- For `if (variable)` where value is truthy: false branch is unreachable
+- For `if (!variable)` where value is truthy: entire block is unreachable
+- For `when` / `switch` / `case`: keep only matching arm, remove others
+- For ternary operators: apply same logic
 
-**2.4 Verify preserved code integrity**
-- Ensure remaining code references only existing symbols
-- Check that required imports are still valid
+**3.3 Identify cascade deletions**
+- Mark methods only called from unreachable branches
+- Mark fields only accessed from unreachable code
+- Track: deleted branches → their callers → exclusively used symbols
 
-### Step 3: Prune Unreachable Paths
+**3.4 Verify preserved code integrity**
+- Ensure remaining code has no dangling references
+- Check imports are still needed
+
+### Step 4: Prune Unreachable Paths
 Remove in order:
-1. Unreachable branches (if/else/when)
-2. Unreachable methods (no valid callers)
-3. Unused fields and parameters
-4. Unused imports
+1. Unreachable branches (if/else/when/case)
+2. Unreachable methods and functions
+3. Unused fields, properties, and parameters
+4. Unused imports and declarations
 
-### Step 4: Generate Clean Output
-Output simplified code with proper formatting.
+### Step 5: Generate Output
+Output the complete pruned code. For large files, consider:
+- Outputting only the modified sections with line markers
+- Or using diff format to reduce token generation
 
 ## Example
 

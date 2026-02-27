@@ -1,6 +1,6 @@
 ---
 name: code-pruner
-description: Prune unreachable code branches based on known parameter values. Use when the user wants to simplify code by removing execution paths that cannot occur given specific parameter constraints. Works with any programming language.
+description: Prune unreachable code branches based on known parameter values. Use when the user wants to simplify code by removing execution paths that cannot occur given specific parameter constraints. Works with any programming language. Optimized version using line-based replacements for speed.
 ---
 
 # Code Pruner
@@ -28,16 +28,7 @@ Given a code file and parameter constraints, this skill analyzes control flow an
 - Early returns that always/never trigger
 - Loop bodies that never execute (e.g., `while(false)`)
 - Dead code after unconditional returns
-- **External-inaccessible methods** only called from pruned code (see Step 3.3)
-
-### Output
-
-**Unified diff format** showing only changes:
-- Lines removed: prefixed with `-`
-- Lines added/kept: prefixed with `+` or context
-- Reduces token generation vs full file output
-
-Optional: Provide full pruned file if explicitly requested.
+- Methods that become unreachable (only called from pruned code)
 
 ## Process
 
@@ -48,96 +39,103 @@ Identify which variables have known values from the user's description.
 **CRITICAL: Read the entire file at once.** Do NOT read line-by-line or in chunks.
 - Use `read` without offset/limit to load complete file into context
 - This enables global analysis and avoids repeated context rebuilding
-- If file exceeds context window, use `exec` with `cat` or `head/tail` to extract relevant sections
 
-### Step 3: Systematic Code Analysis
-With the complete file in context:
+### Step 3: Find Target Code Locations
+Scan the code for all locations where target variables are used:
+- `if (variable)` / `if (!variable)` expressions
+- `when` / `switch` statements
+- Method calls using the variable
+- Constructor parameters
 
-**3.1 Locate all conditional expressions containing target variables**
-- Scan for: `if (variable)`, `if (variable == ...)`, `if (!variable)`, `when (variable)`, `switch (variable)`, etc.
-- Identify method signatures using the variable as parameter
-- Note constructor parameters and field declarations
+### Step 4: Generate Replacement Instructions
 
-**3.2 Evaluate each condition with known values**
-- For `if (variable)` where value is truthy: false branch is unreachable
-- For `if (!variable)` where value is truthy: entire block is unreachable
-- For `when` / `switch` / `case`: keep only matching arm, remove others
-- For ternary operators: apply same logic
+**Output format: JSON replacement instructions**
 
-**3.3 Identify cascade deletions (single file scope, external-inaccessible only)**
-- Mark unreachable branches first
-- Then mark methods **only called from unreachable code AND not externally accessible**
-- **External accessibility check**: Skip `public` methods; only consider `private`, `internal`, or file-scoped methods
-- Mark fields **only accessed from unreachable code**
-- Track: deleted branches → their callers (if not public) → exclusively used symbols
-- **Iterate**: After marking deletions, re-check if newly deleted code reveals more deletable methods
-- **Stop when**: No new deletable methods found in current iteration
+Instead of generating the full diff, output a JSON object with line-based replacements:
 
-**3.4 Verify preserved code integrity**
-- Ensure remaining code has no dangling references
-- Check imports are still needed
-
-### Step 4: Prune Unreachable Paths
-Remove in order:
-1. Unreachable branches (if/else/when/case)
-2. Unreachable methods and functions (external-inaccessible only)
-3. Unused fields, properties, and parameters
-4. Unused imports and declarations
-
-### Step 5: Generate Diff Output
-
-**Output format: Unified diff**
-
-Generate a unified diff showing only the changes:
-```diff
---- original.kt
-+++ pruned.kt
-@@ -10,7 +10,6 @@
- import io.modelcontextprotocol.kotlin.sdk.types.JSONRPCMessage
--import io.modelcontextprotocol.kotlin.sdk.types.JSONRPCEmptyMessage
- import io.modelcontextprotocol.kotlin.sdk.types.JSONRPCResponse
+```json
+{
+  "target_variable": "enableJsonResponse",
+  "replacements": [
+    {
+      "start_line": 174,
+      "end_line": 178,
+      "new_code": "",
+      "reason": "Delete if (!enableJsonResponse) block - always false"
+    },
+    {
+      "start_line": 404,
+      "end_line": 416,
+      "new_code": "",
+      "reason": "Delete closeSseStream method - only early return when enableJsonResponse=true"
+    }
+  ]
+}
 ```
 
-**Benefits:**
-- Token count ~ O(number of changed lines), not O(file size)
-- Human can review what was removed
-- Can be applied with `patch` command if needed
+**Fields:**
+- `start_line`: First line to replace (1-indexed)
+- `end_line`: Last line to replace (exclusive, 1-indexed)
+- `new_code`: Replacement code (empty string to delete)
+- `reason`: Explanation for the change
 
-**If user requests full file:** Provide complete pruned code separately.
+**Benefits:**
+- Model output: O(number of changes) tokens, not O(file size)
+- External tool applies replacements in milliseconds
+- Human can review the JSON decisions
+
+### Step 5: Execute Replacements
+
+Save the JSON to a file and run the line replacer:
+```bash
+python3 /root/.openclaw/workspace/line_replacer.py <file.kt> <replacements.json>
+```
+
+This will:
+1. Apply replacements from end to start (avoiding line number shifts)
+2. Generate unified diff
+3. Save pruned file
 
 ## Example
 
 **Input:**
-```python
-def process(data, skip_validation=False):
-    if not skip_validation:
-        validate(data)
-    if data.get('type') == 'A':
-        handle_a(data)
-    else:
-        handle_b(data)
+```kotlin
+// File: Server.kt, Constraint: enableJsonResponse = true
+
+fun handleRequest() {
+    if (!enableJsonResponse) {
+        setupSse()
+    }
+    if (enableJsonResponse) {
+        return JsonResponse()
+    }
+}
 ```
 
-**Constraint:** "`skip_validation` is true, `data['type']` is 'A'"
-
-**Output (diff format):**
-```diff
---- original.py
-+++ pruned.py
-@@ -1,8 +1,5 @@
- def process(data, skip_validation=False):
--    if not skip_validation:
--        validate(data)
--    if data.get('type') == 'A':
--        handle_a(data)
-+    handle_a(data)
--    else:
--        handle_b(data)
+**Output (JSON):**
+```json
+{
+  "target_variable": "enableJsonResponse",
+  "replacements": [
+    {
+      "start_line": 4,
+      "end_line": 6,
+      "new_code": "",
+      "reason": "Delete if (!enableJsonResponse) block - always false"
+    },
+    {
+      "start_line": 7,
+      "end_line": 9,
+      "new_code": "return JsonResponse()",
+      "reason": "Simplify if (enableJsonResponse) - condition always true"
+    }
+  ]
+}
 ```
 
 ## Notes
 
-- Preserves function signatures (parameters remain for compatibility)
-- Does not evaluate complex expressions beyond simple comparisons
+- Line numbers must be accurate (use 1-indexed line numbers)
+- Replacements are applied from end to start to avoid offset issues
 - Side effects in pruned branches are lost — review output carefully
-- **Limitation**: Only removes external-inaccessible methods; `public` methods are preserved even if seemingly unused
+- For complex transformations, `new_code` can contain replacement code

@@ -1,0 +1,23 @@
+{
+  "skill_name": "code-pruner",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Prune this Python code with constraints: config['debug'] is False, user is not None\n\n```python\ndef handle_request(config, user):\n    if config.get('debug'):\n        print('Debug mode')\n        log_verbose()\n    \n    if user is None:\n        return 'Anonymous'\n    \n    if config.get('env') == 'prod':\n        return user.name\n    else:\n        return user.name + ' (dev)'\n```",
+      "expected_output": "Should remove debug branch and anonymous return, keep prod check",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "Prune this JavaScript with constraints: status is 'error', retryCount is 0\n\n```javascript\nasync function fetchData(status, retryCount) {\n    if (status === 'success') {\n        return await getData();\n    }\n    \n    if (retryCount > 0) {\n        await delay(1000);\n        return fetchData(status, retryCount - 1);\n    }\n    \n    throw new Error('Failed');\n}\n```",
+      "expected_output": "Should remove success branch and retry loop, keep only throw",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "Prune this Go code with constraints: featureFlag is true, level is 'admin'\n\n```go\nfunc processUser(featureFlag bool, level string) {\n    if !featureFlag {\n        return\n    }\n    \n    switch level {\n    case 'admin':\n        grantFullAccess()\n    case 'user':\n        grantLimitedAccess()\n    default:\n        denyAccess()\n    }\n}\n```",
+      "expected_output": "Should remove early return and non-admin cases, keep only grantFullAccess()",
+      "files": []
+    }
+  ]
+}

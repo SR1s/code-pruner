@@ -28,13 +28,16 @@ Given a code file and parameter constraints, this skill analyzes control flow an
 - Early returns that always/never trigger
 - Loop bodies that never execute (e.g., `while(false)`)
 - Dead code after unconditional returns
+- **External-inaccessible methods** only called from pruned code (see Step 3.3)
 
 ### Output
 
-Clean, pruned code with:
-- Unreachable branches removed
-- Remaining code properly indented
-- Comments indicating what was pruned (optional)
+**Unified diff format** showing only changes:
+- Lines removed: prefixed with `-`
+- Lines added/kept: prefixed with `+` or context
+- Reduces token generation vs full file output
+
+Optional: Provide full pruned file if explicitly requested.
 
 ## Process
 
@@ -61,10 +64,14 @@ With the complete file in context:
 - For `when` / `switch` / `case`: keep only matching arm, remove others
 - For ternary operators: apply same logic
 
-**3.3 Identify cascade deletions**
-- Mark methods only called from unreachable branches
-- Mark fields only accessed from unreachable code
-- Track: deleted branches → their callers → exclusively used symbols
+**3.3 Identify cascade deletions (single file scope, external-inaccessible only)**
+- Mark unreachable branches first
+- Then mark methods **only called from unreachable code AND not externally accessible**
+- **External accessibility check**: Skip `public` methods; only consider `private`, `internal`, or file-scoped methods
+- Mark fields **only accessed from unreachable code**
+- Track: deleted branches → their callers (if not public) → exclusively used symbols
+- **Iterate**: After marking deletions, re-check if newly deleted code reveals more deletable methods
+- **Stop when**: No new deletable methods found in current iteration
 
 **3.4 Verify preserved code integrity**
 - Ensure remaining code has no dangling references
@@ -73,14 +80,30 @@ With the complete file in context:
 ### Step 4: Prune Unreachable Paths
 Remove in order:
 1. Unreachable branches (if/else/when/case)
-2. Unreachable methods and functions
+2. Unreachable methods and functions (external-inaccessible only)
 3. Unused fields, properties, and parameters
 4. Unused imports and declarations
 
-### Step 5: Generate Output
-Output the complete pruned code. For large files, consider:
-- Outputting only the modified sections with line markers
-- Or using diff format to reduce token generation
+### Step 5: Generate Diff Output
+
+**Output format: Unified diff**
+
+Generate a unified diff showing only the changes:
+```diff
+--- original.kt
++++ pruned.kt
+@@ -10,7 +10,6 @@
+ import io.modelcontextprotocol.kotlin.sdk.types.JSONRPCMessage
+-import io.modelcontextprotocol.kotlin.sdk.types.JSONRPCEmptyMessage
+ import io.modelcontextprotocol.kotlin.sdk.types.JSONRPCResponse
+```
+
+**Benefits:**
+- Token count ~ O(number of changed lines), not O(file size)
+- Human can review what was removed
+- Can be applied with `patch` command if needed
+
+**If user requests full file:** Provide complete pruned code separately.
 
 ## Example
 
@@ -97,10 +120,19 @@ def process(data, skip_validation=False):
 
 **Constraint:** "`skip_validation` is true, `data['type']` is 'A'"
 
-**Output:**
-```python
-def process(data, skip_validation=False):
-    handle_a(data)
+**Output (diff format):**
+```diff
+--- original.py
++++ pruned.py
+@@ -1,8 +1,5 @@
+ def process(data, skip_validation=False):
+-    if not skip_validation:
+-        validate(data)
+-    if data.get('type') == 'A':
+-        handle_a(data)
++    handle_a(data)
+-    else:
+-        handle_b(data)
 ```
 
 ## Notes
@@ -108,3 +140,4 @@ def process(data, skip_validation=False):
 - Preserves function signatures (parameters remain for compatibility)
 - Does not evaluate complex expressions beyond simple comparisons
 - Side effects in pruned branches are lost — review output carefully
+- **Limitation**: Only removes external-inaccessible methods; `public` methods are preserved even if seemingly unused

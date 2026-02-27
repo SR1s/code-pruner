@@ -1,6 +1,6 @@
 ---
 name: code-pruner
-description: Prune unreachable code branches based on known parameter values. Use when the user wants to simplify code by removing execution paths that cannot occur given specific parameter constraints. Works with any programming language. Optimized version using line-based replacements for speed.
+description: Prune unreachable code branches based on known parameter values. Use when the user wants to simplify code by removing execution paths that cannot occur given specific parameter constraints. Works with any programming language. Optimized version using built-in edit tool for speed.
 ---
 
 # Code Pruner
@@ -27,7 +27,6 @@ Given a code file and parameter constraints, this skill analyzes control flow an
 - Switch/case arms that cannot match
 - Early returns that always/never trigger
 - Loop bodies that never execute (e.g., `while(false)`)
-- Dead code after unconditional returns
 - Methods that become unreachable (only called from pruned code)
 
 ## Process
@@ -49,9 +48,9 @@ Scan the code for all locations where target variables are used:
 
 ### Step 4: Generate Replacement Instructions
 
-**Output format: JSON replacement instructions**
+**Output format: JSON with old_string for direct edit**
 
-Instead of generating the full diff, output a JSON object with line-based replacements:
+Output a JSON object containing all replacements with the exact text to be replaced:
 
 ```json
 {
@@ -60,47 +59,57 @@ Instead of generating the full diff, output a JSON object with line-based replac
     {
       "start_line": 174,
       "end_line": 178,
+      "old_string": "if (!enableJsonResponse) {\n            activeStream?.let { stream ->\n                emitOnStream(streamId, stream.session, message)\n            }\n        }",
       "new_code": "",
       "reason": "Delete if (!enableJsonResponse) block - always false"
     },
     {
-      "start_line": 404,
-      "end_line": 416,
-      "new_code": "",
-      "reason": "Delete closeSseStream method - only early return when enableJsonResponse=true"
+      "start_line": 191,
+      "end_line": 203,
+      "old_string": "if (enableJsonResponse) {\n            activeStream.call.response.header(...)\n            ...\n        }",
+      "new_code": "activeStream.call.response.header(...)\n            ...",
+      "reason": "Simplify if (enableJsonResponse) - remove wrapper, keep body"
     }
   ]
 }
 ```
 
 **Fields:**
-- `start_line`: First line to replace (1-indexed)
-- `end_line`: Last line to replace (exclusive, 1-indexed)
+- `start_line`: First line to replace (1-indexed, for reference)
+- `end_line`: Last line to replace (1-indexed, for reference)
+- `old_string`: **Exact text** to be replaced (must match file content precisely)
 - `new_code`: Replacement code (empty string to delete)
 - `reason`: Explanation for the change
 
-**Benefits:**
-- Model output: O(number of changes) tokens, not O(file size)
-- External tool applies replacements in milliseconds
-- Human can review the JSON decisions
+**Important:** The `old_string` must match the file content exactly, including indentation and whitespace.
 
-### Step 5: Execute Replacements
+### Step 5: Execute Replacements Using Built-in Edit Tool
 
-Save the JSON to a file and run the line replacer:
-```bash
-python3 /root/.openclaw/workspace/line_replacer.py <file.kt> <replacements.json>
+Apply replacements from **end to start** (highest line number first) to avoid line number shifts:
+
+For each replacement in reverse order:
+1. Use `edit` tool with `old_string` and `new_code`
+2. Verify the edit succeeded
+
+Example tool call:
+```
+edit(file_path="/path/to/file.kt", 
+     old_string="if (!enableJsonResponse) {\n            activeStream?.let { stream ->\n                emitOnStream(streamId, stream.session, message)\n            }\n        }",
+     new_code="")
 ```
 
-This will:
-1. Apply replacements from end to start (avoiding line number shifts)
-2. Generate unified diff
-3. Save pruned file
+### Step 6: Generate Diff
+
+After all edits are applied, generate a unified diff showing all changes:
+- Use `exec` with `diff -u` to compare original and modified files
+- Or use `read` to show key sections
 
 ## Example
 
 **Input:**
 ```kotlin
-// File: Server.kt, Constraint: enableJsonResponse = true
+// File: Server.kt
+// Constraint: enableJsonResponse = true
 
 fun handleRequest() {
     if (!enableJsonResponse) {
@@ -112,7 +121,7 @@ fun handleRequest() {
 }
 ```
 
-**Output (JSON):**
+**Output (JSON with old_string):**
 ```json
 {
   "target_variable": "enableJsonResponse",
@@ -120,22 +129,27 @@ fun handleRequest() {
     {
       "start_line": 4,
       "end_line": 6,
+      "old_string": "    if (!enableJsonResponse) {\n        setupSse()\n    }",
       "new_code": "",
       "reason": "Delete if (!enableJsonResponse) block - always false"
     },
     {
       "start_line": 7,
       "end_line": 9,
-      "new_code": "return JsonResponse()",
-      "reason": "Simplify if (enableJsonResponse) - condition always true"
+      "old_string": "    if (enableJsonResponse) {\n        return JsonResponse()\n    }",
+      "new_code": "    return JsonResponse()",
+      "reason": "Simplify if (enableJsonResponse) - remove wrapper, keep body"
     }
   ]
 }
 ```
 
+**Execution:**
+Apply edits in reverse order (line 9 first, then line 4) using `edit` tool.
+
 ## Notes
 
-- Line numbers must be accurate (use 1-indexed line numbers)
-- Replacements are applied from end to start to avoid offset issues
+- Always include exact `old_string` with proper indentation
+- Apply replacements from end to start to avoid line number shifts
+- `old_string` must match file content precisely for `edit` to work
 - Side effects in pruned branches are lost — review output carefully
-- For complex transformations, `new_code` can contain replacement code

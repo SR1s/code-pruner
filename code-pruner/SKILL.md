@@ -38,10 +38,38 @@ Clean, pruned code with:
 
 ## Process
 
-1. **Parse constraints** — Identify which variables have known values
-2. **Analyze control flow** — Evaluate conditions using known values
-3. **Prune unreachable paths** — Remove branches that cannot execute
-4. **Generate clean output** — Output simplified code
+### Step 1: Parse Constraints
+Identify which variables have known values from the user's description.
+
+### Step 2: Systematic Code Analysis
+
+**2.1 Locate all conditional expressions containing target variables**
+- Search for: `if (variable)`, `if (variable == ...)`, `if (!variable)`, `when (variable)`, etc.
+- Include: method calls using the variable as parameter
+
+**2.2 Evaluate each condition with known values**
+- For `if (enableJsonResponse)` where value is `true`: false branch is unreachable
+- For `if (!enableJsonResponse)` where value is `true`: entire block is unreachable
+- For `when` / `switch`: keep only matching case, remove others
+
+**2.3 Identify cascade deletions**
+- If a method becomes unreachable (only called from deleted branches), mark for removal
+- If a field becomes unused, mark for removal
+- Track dependencies: deleted code → callers → fields/methods only they used
+
+**2.4 Verify preserved code integrity**
+- Ensure remaining code references only existing symbols
+- Check that required imports are still valid
+
+### Step 3: Prune Unreachable Paths
+Remove in order:
+1. Unreachable branches (if/else/when)
+2. Unreachable methods (no valid callers)
+3. Unused fields and parameters
+4. Unused imports
+
+### Step 4: Generate Clean Output
+Output simplified code with proper formatting.
 
 ## Example
 
